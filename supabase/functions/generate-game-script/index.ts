@@ -38,10 +38,26 @@ serve(async (req) => {
       throw new Error('OPENAI_API_KEY is not configured');
     }
 
-    // Initialize Supabase client
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // Initialize clients
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+      throw new Error('Backend keys are not configured (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY)');
+    }
+
+    // Standard client (respects RLS)
+    const supabase = createClient(supabaseUrl, anonKey, {
+      global: {
+        headers: {
+          Authorization: req.headers.get('Authorization') ?? '',
+        },
+      },
+    });
+
+    // Admin client (bypasses RLS) - used for critical status update
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     // Fetch all players (excluding host)
     const { data: players, error: playersError } = await supabase
@@ -173,7 +189,8 @@ Please respond in this exact JSON format:
     }
 
     // Update room status to 'playing' - CRITICAL for triggering navigation
-    const { error: statusError } = await supabase
+    // Use admin client so this works even when called by anonymous players.
+    const { error: statusError } = await supabaseAdmin
       .from('game_rooms')
       .update({ status: 'playing' })
       .eq('id', room_id);
