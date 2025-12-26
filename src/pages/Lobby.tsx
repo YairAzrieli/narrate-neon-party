@@ -19,12 +19,42 @@ const Lobby = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Navigate to game when room status changes to 'playing'
+  // Navigate to game when room status changes to 'playing' (via hook)
   useEffect(() => {
     if (room?.status === 'playing') {
       navigate(`/game/${room.room_code}`, { replace: true });
     }
   }, [room?.status, room?.room_code, navigate]);
+
+  // Extra aggressive: Direct realtime subscription for room status
+  useEffect(() => {
+    if (!room?.id) return;
+
+    const channel = supabase
+      .channel(`lobby-room-status-${room.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'game_rooms',
+          filter: `id=eq.${room.id}`,
+        },
+        (payload) => {
+          console.log('Lobby: Room updated', payload);
+          if (payload.new && (payload.new as any).status === 'playing') {
+            navigate(`/game/${room.room_code}`, { replace: true });
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('Lobby subscription status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [room?.id, room?.room_code, navigate]);
 
   const handleCreateGame = async () => {
     const newRoom = await createRoom();
