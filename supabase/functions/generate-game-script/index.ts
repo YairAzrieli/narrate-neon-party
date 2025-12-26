@@ -7,6 +7,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Input validation constants
+const MAX_THEME_LENGTH = 100;
+const MAX_ROLE_NAME_LENGTH = 50;
+const MAX_WEREWOLVES = 10;
+const MAX_DOCTORS = 5;
+const MAX_SEERS = 5;
+const MAX_VILLAGERS = 50;
+const ALLOWED_LANGUAGES = ['en', 'he'];
+const ALLOWED_GAME_MODES = ['mafia', 'one_night'];
+
 interface Player {
   id: string;
   name: string;
@@ -34,28 +44,117 @@ interface CustomRoleNames {
   villager?: string;
 }
 
+// Sanitize string input - remove dangerous characters but keep unicode
+function sanitizeString(input: unknown, maxLength: number): string | null {
+  if (!input || typeof input !== 'string') return null;
+  return input
+    .trim()
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+    .substring(0, maxLength);
+}
+
+// Validate UUID format
+function isValidUUID(id: unknown): boolean {
+  if (typeof id !== 'string') return false;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(id);
+}
+
+// Validate role counts
+function validateRoleCounts(counts: unknown): RoleCounts | null {
+  if (!counts || typeof counts !== 'object') return null;
+  
+  const c = counts as Record<string, unknown>;
+  const werewolves = typeof c.werewolves === 'number' ? Math.min(Math.max(0, Math.floor(c.werewolves)), MAX_WEREWOLVES) : undefined;
+  const doctors = typeof c.doctors === 'number' ? Math.min(Math.max(0, Math.floor(c.doctors)), MAX_DOCTORS) : undefined;
+  const seers = typeof c.seers === 'number' ? Math.min(Math.max(0, Math.floor(c.seers)), MAX_SEERS) : undefined;
+  const villagers = typeof c.villagers === 'number' ? Math.min(Math.max(0, Math.floor(c.villagers)), MAX_VILLAGERS) : undefined;
+  
+  if (werewolves === undefined && doctors === undefined && seers === undefined && villagers === undefined) {
+    return null;
+  }
+  
+  return {
+    werewolves: werewolves ?? 1,
+    doctors: doctors ?? 1,
+    seers: seers ?? 1,
+    villagers: villagers ?? 1,
+  };
+}
+
+// Validate custom role names
+function validateCustomRoleNames(names: unknown): CustomRoleNames | null {
+  if (!names || typeof names !== 'object') return null;
+  
+  const n = names as Record<string, unknown>;
+  const result: CustomRoleNames = {};
+  
+  if (n.werewolf) {
+    const sanitized = sanitizeString(n.werewolf, MAX_ROLE_NAME_LENGTH);
+    if (sanitized) result.werewolf = sanitized;
+  }
+  if (n.doctor) {
+    const sanitized = sanitizeString(n.doctor, MAX_ROLE_NAME_LENGTH);
+    if (sanitized) result.doctor = sanitized;
+  }
+  if (n.seer) {
+    const sanitized = sanitizeString(n.seer, MAX_ROLE_NAME_LENGTH);
+    if (sanitized) result.seer = sanitized;
+  }
+  if (n.villager) {
+    const sanitized = sanitizeString(n.villager, MAX_ROLE_NAME_LENGTH);
+    if (sanitized) result.villager = sanitized;
+  }
+  
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    const body = await req.json();
     const { 
       room_id, 
-      theme, 
-      language = 'en',
-      game_mode = 'mafia',
-      role_counts,
-      custom_role_names,
-      custom_role_map,
-    } = await req.json();
+      theme: rawTheme, 
+      language: rawLanguage,
+      game_mode: rawGameMode,
+      role_counts: rawRoleCounts,
+      custom_role_names: rawCustomRoleNames,
+      custom_role_map: rawCustomRoleMap,
+    } = body;
 
-    const effectiveCustomRoleNames: CustomRoleNames | undefined = custom_role_names ?? custom_role_map;
-    
-    if (!room_id || !theme) {
-      throw new Error('room_id and theme are required');
+    // Validate room_id (required)
+    if (!isValidUUID(room_id)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid or missing room_id' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
+    // Validate and sanitize theme (required)
+    const theme = sanitizeString(rawTheme, MAX_THEME_LENGTH);
+    if (!theme || theme.length === 0) {
+      return new Response(
+        JSON.stringify({ error: 'Theme is required and must be 1-100 characters' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Validate language
+    const language = ALLOWED_LANGUAGES.includes(rawLanguage) ? rawLanguage : 'en';
+    
+    // Validate game mode
+    const game_mode = ALLOWED_GAME_MODES.includes(rawGameMode) ? rawGameMode : 'mafia';
+    
+    // Validate role counts
+    const role_counts = validateRoleCounts(rawRoleCounts);
+    
+    // Validate custom role names (accept either field name)
+    const effectiveCustomRoleNames = validateCustomRoleNames(rawCustomRoleNames) ?? validateCustomRoleNames(rawCustomRoleMap);
+    
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openAIApiKey) {
       throw new Error('OPENAI_API_KEY is not configured');
@@ -79,6 +178,27 @@ serve(async (req) => {
 
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
+    // Verify room exists and is in waiting state (prevents abuse)
+    const { data: roomCheck, error: roomError } = await supabaseAdmin
+      .from('game_rooms')
+      .select('id, status')
+      .eq('id', room_id)
+      .single();
+
+    if (roomError || !roomCheck) {
+      return new Response(
+        JSON.stringify({ error: 'Room not found' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (roomCheck.status !== 'waiting') {
+      return new Response(
+        JSON.stringify({ error: 'Game already started for this room' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Fetch all players (excluding host)
     const { data: players, error: playersError } = await supabase
       .from('players')
@@ -95,7 +215,7 @@ serve(async (req) => {
     }
 
     console.log(`Found ${players.length} players for room ${room_id}`);
-    console.log('Settings:', { language, game_mode, role_counts, effectiveCustomRoleNames });
+    console.log('Validated settings:', { language, game_mode, role_counts, effectiveCustomRoleNames });
 
     // Assign base roles with custom counts if provided
     const roleAssignments = assignRoles(players, role_counts);
@@ -315,7 +435,7 @@ Important:
   }
 });
 
-function assignRoles(players: Player[], roleCounts?: RoleCounts): RoleAssignment[] {
+function assignRoles(players: Player[], roleCounts?: RoleCounts | null): RoleAssignment[] {
   const shuffled = [...players].sort(() => Math.random() - 0.5);
   const assignments: RoleAssignment[] = [];
 

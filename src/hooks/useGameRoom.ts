@@ -87,7 +87,26 @@ export const useGameRoom = (roomCode?: string) => {
   };
 
   const uploadAvatar = async (file: File) => {
-    const fileExt = file.name.split('.').pop();
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      throw new Error('Only image files (JPEG, PNG, GIF, WebP) are allowed');
+    }
+    
+    // Validate file size (5MB limit)
+    const maxSize = 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+      throw new Error('File must be smaller than 5MB');
+    }
+    
+    // Map MIME type to safe extension
+    const mimeToExt: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+    };
+    const fileExt = mimeToExt[file.type] || 'jpg';
     const fileName = `${crypto.randomUUID()}.${fileExt}`;
     
     const { error: uploadError } = await supabase.storage
