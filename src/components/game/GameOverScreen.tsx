@@ -163,17 +163,17 @@ export const GameOverScreen = ({
       <div className="mt-auto space-y-3 shrink-0">
         <Button
           onClick={onPlayAgain}
-          className="w-full gap-2"
+          className="w-full gap-2 transition-all hover:scale-[1.02]"
           size="lg"
         >
           <RotateCcw className="w-5 h-5" />
-          Play Again
+          Play Again (Same Players)
         </Button>
         
         <Button
           onClick={() => navigate('/')}
           variant="outline"
-          className="w-full gap-2"
+          className="w-full gap-2 transition-all hover:scale-[1.02]"
           size="lg"
         >
           <Home className="w-5 h-5" />

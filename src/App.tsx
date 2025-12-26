@@ -3,6 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Index from "./pages/Index";
 import Lobby from "./pages/Lobby";
 import JoinGame from "./pages/JoinGame";
 import GameScreen from "./pages/GameScreen";
@@ -17,7 +18,8 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Lobby />} />
+          <Route path="/" element={<Index />} />
+          <Route path="/lobby" element={<Lobby />} />
           <Route path="/join/:code" element={<JoinGame />} />
           <Route path="/game/:code" element={<GameScreen />} />
           <Route path="*" element={<NotFound />} />
