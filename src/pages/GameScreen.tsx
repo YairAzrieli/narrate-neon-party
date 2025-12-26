@@ -205,7 +205,7 @@ const GameScreen = () => {
 
   // Play TTS audio via edge function
   const playAudio = useCallback(async (text: string, voice: string) => {
-    if (isGeneratingAudio || isSpeaking) return;
+    if (isGeneratingAudio || isSpeaking || !roomId) return;
 
     setIsGeneratingAudio(true);
     try {
@@ -218,12 +218,13 @@ const GameScreen = () => {
             apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
             Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
           },
-          body: JSON.stringify({ text, voice }),
+          body: JSON.stringify({ text, voice, room_id: roomId }),
         }
       );
 
       if (!response.ok) {
-        throw new Error('TTS generation failed');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'TTS generation failed');
       }
 
       const data = await response.json();
@@ -243,11 +244,11 @@ const GameScreen = () => {
       await audio.play();
     } catch (error) {
       console.error('TTS error:', error);
-      toast({ title: 'Audio playback failed', variant: 'destructive' });
+      toast({ title: 'Audio playback failed', description: error instanceof Error ? error.message : 'Unknown error', variant: 'destructive' });
     } finally {
       setIsGeneratingAudio(false);
     }
-  }, [isGeneratingAudio, isSpeaking, toast]);
+  }, [isGeneratingAudio, isSpeaking, roomId, toast]);
 
   const stopAudio = useCallback(() => {
     if (audioRef.current) {
