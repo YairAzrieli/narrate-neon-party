@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Lobby from "./pages/Lobby";
 import JoinGame from "./pages/JoinGame";
+import GameScreen from "./pages/GameScreen";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -18,6 +19,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Lobby />} />
           <Route path="/join/:code" element={<JoinGame />} />
+          <Route path="/game/:code" element={<GameScreen />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
