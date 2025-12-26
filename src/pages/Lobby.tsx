@@ -8,11 +8,14 @@ import { PlayerGrid } from '@/components/PlayerGrid';
 import { JoinForm } from '@/components/JoinForm';
 import { Loader2, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 const Lobby = () => {
   const [gameCode, setGameCode] = useState('');
   const [pendingRoom, setPendingRoom] = useState<{ id: string; room_code: string } | null>(null);
   const [isSettingUpHost, setIsSettingUpHost] = useState(false);
+  const [theme, setTheme] = useState('');
+  const [isStarting, setIsStarting] = useState(false);
   const { room, players, loading, error, createRoom, joinRoom, addPlayer, uploadAvatar } = useGameRoom();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -56,6 +59,40 @@ const Lobby = () => {
       navigate(`/join/${foundRoom.room_code}`);
     } else {
       toast({ title: 'Room not found', variant: 'destructive' });
+    }
+  };
+
+  // Filter out host from displayed players
+  const activePlayers = players.filter(p => !p.is_host);
+
+  const handleStartGame = async () => {
+    if (!room || !theme.trim()) {
+      toast({ title: 'Please enter a theme for the game', variant: 'destructive' });
+      return;
+    }
+
+    if (activePlayers.length < 1) {
+      toast({ title: 'Need at least 1 player to start', variant: 'destructive' });
+      return;
+    }
+
+    setIsStarting(true);
+    try {
+      const { data, error: fnError } = await supabase.functions.invoke('generate-game-script', {
+        body: { room_id: room.id, theme: theme.trim() }
+      });
+
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+
+      toast({ title: 'Game Started!', description: 'The night phase begins...' });
+      // Navigation to game screen would go here
+      console.log('Game session created:', data);
+    } catch (err: any) {
+      console.error('Start game error:', err);
+      toast({ title: 'Failed to start game', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsStarting(false);
     }
   };
 
@@ -117,18 +154,35 @@ const Lobby = () => {
             )}
           </div>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-6">
             <RoomDisplay roomCode={room.room_code} />
             
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold text-center">
-                Players ({players.length})
+            <div className="space-y-3">
+              <h2 className="text-base font-semibold text-center">
+                Players ({activePlayers.length})
               </h2>
-              <PlayerGrid players={players} />
+              <PlayerGrid players={activePlayers} />
             </div>
 
-            <Button className="w-full text-lg py-6" disabled={players.length < 2}>
-              Start Game
+            <div className="space-y-3">
+              <label className="text-sm font-medium text-muted-foreground block text-center">
+                Game Theme
+              </label>
+              <Input
+                placeholder="e.g., Harry Potter, Israeli Army, Pirates..."
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                className="text-center"
+              />
+            </div>
+
+            <Button 
+              className="w-full text-lg py-6" 
+              disabled={activePlayers.length < 1 || !theme.trim() || isStarting}
+              onClick={handleStartGame}
+            >
+              {isStarting ? <Loader2 className="animate-spin mr-2" /> : null}
+              {isStarting ? 'Generating Script...' : 'Start Game'}
             </Button>
           </div>
         )}
