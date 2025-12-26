@@ -6,6 +6,7 @@ export interface Player {
   id: string;
   name: string;
   avatar_url: string | null;
+  is_host: boolean;
   joined_at: string;
 }
 
@@ -13,6 +14,7 @@ export interface GameRoom {
   id: string;
   room_code: string;
   status: string;
+  theme: string | null;
   created_at: string;
 }
 
@@ -67,10 +69,10 @@ export const useGameRoom = (roomCode?: string) => {
     }
   };
 
-  const addPlayer = async (roomId: string, name: string, avatarUrl: string | null) => {
+  const addPlayer = async (roomId: string, name: string, avatarUrl: string | null, isHost: boolean = false) => {
     const { data, error: insertError } = await supabase
       .from('players')
-      .insert({ room_id: roomId, name, avatar_url: avatarUrl })
+      .insert({ room_id: roomId, name, avatar_url: avatarUrl, is_host: isHost })
       .select()
       .single();
 
