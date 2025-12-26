@@ -30,15 +30,21 @@ export const useGameRoom = (roomCode?: string) => {
     
     try {
       const code = generateRoomCode();
-      const { data, error: createError } = await supabase
+      const { data: roomData, error: createError } = await supabase
         .from('game_rooms')
         .insert({ room_code: code })
         .select()
         .single();
 
       if (createError) throw createError;
-      setRoom(data);
-      return data;
+
+      // Add host as "Narrator" (no name/avatar needed)
+      await supabase
+        .from('players')
+        .insert({ room_id: roomData.id, name: 'Narrator', avatar_url: null, is_host: true });
+
+      setRoom(roomData);
+      return roomData;
     } catch (err: any) {
       setError(err.message);
       return null;
@@ -94,7 +100,7 @@ export const useGameRoom = (roomCode?: string) => {
     return data.publicUrl;
   };
 
-  // Subscribe to players in real-time
+  // Subscribe to players and room status in real-time
   useEffect(() => {
     if (!room?.id) return;
 
@@ -111,9 +117,9 @@ export const useGameRoom = (roomCode?: string) => {
 
     fetchPlayers();
 
-    // Set up realtime subscription
-    const channel = supabase
-      .channel(`room-${room.id}`)
+    // Set up realtime subscription for players
+    const playersChannel = supabase
+      .channel(`room-players-${room.id}`)
       .on(
         'postgres_changes',
         {
@@ -132,8 +138,27 @@ export const useGameRoom = (roomCode?: string) => {
       )
       .subscribe();
 
+    // Set up realtime subscription for room status
+    const roomChannel = supabase
+      .channel(`room-status-${room.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'game_rooms',
+          filter: `id=eq.${room.id}`,
+        },
+        (payload) => {
+          const newRoom = payload.new as GameRoom;
+          setRoom(newRoom);
+        }
+      )
+      .subscribe();
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(playersChannel);
+      supabase.removeChannel(roomChannel);
     };
   }, [room?.id]);
 

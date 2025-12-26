@@ -21,6 +21,13 @@ const JoinGame = () => {
     }
   }, [code]);
 
+  // Navigate to game when room status changes to 'playing'
+  useEffect(() => {
+    if (room?.status === 'playing' && code) {
+      navigate(`/game/${code.toUpperCase()}`);
+    }
+  }, [room?.status, code, navigate]);
+
   const handleJoin = async (name: string, avatarFile: File | null) => {
     if (!room) return;
     
