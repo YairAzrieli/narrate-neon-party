@@ -69,7 +69,8 @@ const Lobby = () => {
       if (data?.error) throw new Error(data.error);
 
       toast({ title: 'Game Started!', description: 'The night phase begins...' });
-      // Navigation to game screen would go here
+      // Aggressive navigation for host: don't wait for realtime
+      navigate(`/game/${room.room_code}`);
       console.log('Game session created:', data);
     } catch (err: any) {
       console.error('Start game error:', err);
