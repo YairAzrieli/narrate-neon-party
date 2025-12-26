@@ -42,9 +42,12 @@ const JoinGame = () => {
     }
   };
 
+  // Filter out current player (show only others)
+  const otherPlayers = players.filter(p => !p.is_host);
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="h-full bg-background flex items-center justify-center">
         <Loader2 className="w-10 h-10 animate-spin text-primary" />
       </div>
     );
@@ -52,7 +55,7 @@ const JoinGame = () => {
 
   if (error || !room) {
     return (
-      <div className="min-h-screen bg-background px-4 py-8 flex flex-col items-center justify-center">
+      <div className="h-full bg-background px-4 py-6 flex flex-col items-center justify-center">
         <h1 className="text-2xl font-bold text-destructive mb-4">Room Not Found</h1>
         <p className="text-muted-foreground mb-6">This game doesn't exist or has ended.</p>
         <Button onClick={() => navigate('/')}>
@@ -64,8 +67,8 @@ const JoinGame = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8 flex flex-col">
-      <header className="flex items-center gap-4 mb-8">
+    <div className="h-full bg-background px-4 py-6 flex flex-col overflow-hidden">
+      <header className="flex items-center gap-4 mb-6 shrink-0">
         <Button variant="ghost" size="icon" onClick={() => navigate('/')}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
@@ -79,23 +82,25 @@ const JoinGame = () => {
         <div className="w-10" /> {/* Spacer for centering */}
       </header>
 
-      <main className="flex-1 max-w-md mx-auto w-full">
+      <main className="flex-1 max-w-md mx-auto w-full overflow-y-auto">
         {!hasJoined ? (
           <JoinForm onJoin={handleJoin} loading={joining} />
         ) : (
-          <div className="space-y-8">
-            <div className="text-center py-8">
-              <CheckCircle2 className="w-16 h-16 text-primary mx-auto mb-4" />
+          <div className="space-y-6">
+            <div className="text-center py-6">
+              <CheckCircle2 className="w-14 h-14 text-primary mx-auto mb-3" />
               <h2 className="text-2xl font-bold glow-text">You're In!</h2>
               <p className="text-muted-foreground mt-2">Waiting for the host to start the game...</p>
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-center">
-                Players ({players.length})
-              </h3>
-              <PlayerGrid players={players} />
-            </div>
+            {otherPlayers.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-base font-semibold text-center">
+                  Other Players ({otherPlayers.length})
+                </h3>
+                <PlayerGrid players={otherPlayers} />
+              </div>
+            )}
           </div>
         )}
       </main>
