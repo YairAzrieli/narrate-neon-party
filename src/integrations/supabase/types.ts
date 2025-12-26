@@ -44,6 +44,86 @@ export type Database = {
         }
         Relationships: []
       }
+      game_sessions: {
+        Row: {
+          created_at: string
+          id: string
+          phase: string
+          room_id: string
+          script: string | null
+          theme: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          phase?: string
+          room_id: string
+          script?: string | null
+          theme: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          phase?: string
+          room_id?: string
+          script?: string | null
+          theme?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "game_sessions_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "game_rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      player_roles: {
+        Row: {
+          base_role: string
+          created_at: string
+          id: string
+          is_alive: boolean
+          player_id: string
+          session_id: string
+          themed_role: string
+        }
+        Insert: {
+          base_role: string
+          created_at?: string
+          id?: string
+          is_alive?: boolean
+          player_id: string
+          session_id: string
+          themed_role: string
+        }
+        Update: {
+          base_role?: string
+          created_at?: string
+          id?: string
+          is_alive?: boolean
+          player_id?: string
+          session_id?: string
+          themed_role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "player_roles_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "player_roles_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "game_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       players: {
         Row: {
           avatar_url: string | null
