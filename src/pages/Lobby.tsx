@@ -87,8 +87,8 @@ const Lobby = () => {
       return;
     }
 
-    if (activePlayers.length < 1) {
-      toast({ title: 'Need at least 1 player to start', variant: 'destructive' });
+    if (activePlayers.length < 3) {
+      toast({ title: 'Need at least 3 players to start', description: 'Invite more friends!', variant: 'destructive' });
       return;
     }
 
@@ -214,7 +214,7 @@ const Lobby = () => {
 
             <Button 
               className="w-full text-lg py-6" 
-              disabled={activePlayers.length < 1 || !theme.trim() || isStarting}
+              disabled={activePlayers.length < 3 || !theme.trim() || isStarting}
               onClick={handleStartGame}
             >
               {isStarting ? <Loader2 className="animate-spin mr-2" /> : null}
