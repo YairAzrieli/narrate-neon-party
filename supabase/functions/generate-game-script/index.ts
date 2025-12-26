@@ -172,12 +172,18 @@ Please respond in this exact JSON format:
       throw new Error(`Failed to save player roles: ${rolesError.message}`);
     }
 
-    // Update room status to 'playing'
-    await supabase
+    // Update room status to 'playing' - CRITICAL for triggering navigation
+    const { error: statusError } = await supabase
       .from('game_rooms')
       .update({ status: 'playing' })
       .eq('id', room_id);
 
+    if (statusError) {
+      console.error('Failed to update room status:', statusError);
+      throw new Error(`Failed to update room status: ${statusError.message}`);
+    }
+
+    console.log('Room status updated to playing for room:', room_id);
     console.log('Game started successfully!');
 
     return new Response(
