@@ -52,6 +52,8 @@ export type Database = {
           room_id: string
           script: string | null
           theme: string
+          timeline: Json | null
+          timeline_index: number
         }
         Insert: {
           created_at?: string
@@ -60,6 +62,8 @@ export type Database = {
           room_id: string
           script?: string | null
           theme: string
+          timeline?: Json | null
+          timeline_index?: number
         }
         Update: {
           created_at?: string
@@ -68,6 +72,8 @@ export type Database = {
           room_id?: string
           script?: string | null
           theme?: string
+          timeline?: Json | null
+          timeline_index?: number
         }
         Relationships: [
           {
@@ -155,6 +161,65 @@ export type Database = {
             columns: ["room_id"]
             isOneToOne: false
             referencedRelation: "game_rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      votes: {
+        Row: {
+          created_at: string
+          id: string
+          phase: string
+          room_id: string
+          session_id: string
+          target_player_id: string
+          voter_player_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          phase: string
+          room_id: string
+          session_id: string
+          target_player_id: string
+          voter_player_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          phase?: string
+          room_id?: string
+          session_id?: string
+          target_player_id?: string
+          voter_player_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "votes_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "game_rooms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "votes_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "game_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "votes_target_player_id_fkey"
+            columns: ["target_player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "votes_voter_player_id_fkey"
+            columns: ["voter_player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
             referencedColumns: ["id"]
           },
         ]
