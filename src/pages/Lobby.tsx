@@ -60,16 +60,16 @@ const Lobby = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8 flex flex-col">
-      <header className="text-center mb-8">
-        <h1 className="text-4xl font-extrabold glow-text flex items-center justify-center gap-2">
-          <Sparkles className="w-8 h-8 text-primary" />
+    <div className="h-full bg-background px-4 py-6 flex flex-col overflow-hidden">
+      <header className="text-center mb-6 shrink-0">
+        <h1 className="text-3xl font-extrabold glow-text flex items-center justify-center gap-2">
+          <Sparkles className="w-7 h-7 text-primary" />
           Narrator AI
         </h1>
-        <p className="text-muted-foreground mt-2">The AI-powered party game</p>
+        <p className="text-muted-foreground mt-1 text-sm">The AI-powered party game</p>
       </header>
 
-      <main className="flex-1 max-w-md mx-auto w-full">
+      <main className="flex-1 max-w-md mx-auto w-full overflow-y-auto">
         {isSettingUpHost ? (
           <div className="space-y-6">
             <div className="text-center">
