@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { Sparkles, Play, Users, HelpCircle, Moon, Skull, Heart, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HowToPlayModal } from '@/components/HowToPlayModal';
+import { JoinGameModal } from '@/components/JoinGameModal';
 
 const Index = () => {
   const navigate = useNavigate();
   const [showHowToPlay, setShowHowToPlay] = useState(false);
+  const [showJoinGame, setShowJoinGame] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -83,7 +85,7 @@ const Index = () => {
           </Button>
 
           <Button
-            onClick={() => navigate('/lobby')}
+            onClick={() => setShowJoinGame(true)}
             variant="secondary"
             size="lg"
             className="w-full text-lg py-7 gap-3 transition-all hover:scale-[1.02]"
@@ -109,6 +111,7 @@ const Index = () => {
       </div>
 
       <HowToPlayModal open={showHowToPlay} onOpenChange={setShowHowToPlay} />
+      <JoinGameModal open={showJoinGame} onOpenChange={setShowJoinGame} />
     </div>
   );
 };

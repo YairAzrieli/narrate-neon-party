@@ -623,8 +623,8 @@ const GameScreen = () => {
   };
   
   const handlePlayAgain = useCallback(() => {
-    navigate(`/lobby/${code}`);
-  }, [navigate, code]);
+    navigate('/lobby');
+  }, [navigate]);
 
   if (loading) {
     return (
@@ -714,6 +714,15 @@ const GameScreen = () => {
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center max-w-lg mx-auto w-full gap-6">
+          {/* Host Instructions Hint */}
+          {session.timeline_index === 0 && !isSpeaking && !isGeneratingAudio && (
+            <div className="bg-primary/10 border border-primary/30 rounded-xl px-4 py-3 text-center animate-pulse">
+              <p className="text-sm text-primary font-medium">
+                👆 Press "Play Narration" to begin the game!
+              </p>
+            </div>
+          )}
+
           {/* Audio Controls */}
           <div className="flex gap-3">
             {!isSpeaking && !isGeneratingAudio ? (
