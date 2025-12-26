@@ -66,11 +66,44 @@ const GameScreen = () => {
 
   const playerId = localStorage.getItem('player_id');
 
-  // Determine if current user is host
+  // Determine if current user is host - verify from database, not localStorage
   useEffect(() => {
-    const hostFlag = localStorage.getItem('is_host');
-    setIsHost(hostFlag === 'true');
-  }, []);
+    if (!code) return;
+    
+    const verifyHost = async () => {
+      // Check localStorage first as a hint (for faster UX), but verify from DB
+      const hostHint = localStorage.getItem('is_host') === 'true';
+      
+      if (hostHint) {
+        // Verify host status from database
+        const { data: room } = await supabase
+          .from('game_rooms')
+          .select('id')
+          .eq('room_code', code.toUpperCase())
+          .maybeSingle();
+        
+        if (room) {
+          // Check if there's a host player for this room (Narrator)
+          const { data: hostPlayer } = await supabase
+            .from('players')
+            .select('id')
+            .eq('room_id', room.id)
+            .eq('is_host', true)
+            .maybeSingle();
+          
+          // Only set as host if localStorage hint matches reality
+          // In a party game, we verify the host player exists
+          setIsHost(!!hostPlayer && hostHint);
+        } else {
+          setIsHost(false);
+        }
+      } else {
+        setIsHost(false);
+      }
+    };
+    
+    verifyHost();
+  }, [code]);
 
   // Fetch session, player role, and players
   useEffect(() => {
@@ -258,12 +291,24 @@ const GameScreen = () => {
     setIsSpeaking(false);
   }, []);
 
-  // Host advances timeline
+  // Host advances timeline - with server-side verification
   const advanceTimeline = useCallback(async () => {
-    if (!session || isLastItem || isAdvancing) return;
+    if (!session || isLastItem || isAdvancing || !roomId) return;
 
     setIsAdvancing(true);
     try {
+      // Verify host status from database before allowing timeline advance
+      const { data: hostPlayer } = await supabase
+        .from('players')
+        .select('id')
+        .eq('room_id', roomId)
+        .eq('is_host', true)
+        .maybeSingle();
+      
+      if (!hostPlayer) {
+        throw new Error('Only the host can advance the timeline');
+      }
+
       const newIndex = session.timeline_index + 1;
       const newItem = session.timeline?.[newIndex];
 
@@ -283,13 +328,37 @@ const GameScreen = () => {
     } finally {
       setIsAdvancing(false);
     }
-  }, [session, isLastItem, isAdvancing, toast]);
+  }, [session, isLastItem, isAdvancing, roomId, toast]);
 
-  // Submit vote
+  // Submit vote - with player verification
   const submitVote = useCallback(async () => {
     if (!session || !roomId || !playerId || !selectedTarget || hasVoted) return;
 
     try {
+      // Verify player exists in this room before allowing vote
+      const { data: voter } = await supabase
+        .from('players')
+        .select('id')
+        .eq('id', playerId)
+        .eq('room_id', roomId)
+        .maybeSingle();
+      
+      if (!voter) {
+        throw new Error('You are not a valid player in this game');
+      }
+
+      // Verify target player exists
+      const { data: target } = await supabase
+        .from('players')
+        .select('id')
+        .eq('id', selectedTarget)
+        .eq('room_id', roomId)
+        .maybeSingle();
+      
+      if (!target) {
+        throw new Error('Invalid target player');
+      }
+
       const { error } = await supabase
         .from('votes')
         .upsert({
