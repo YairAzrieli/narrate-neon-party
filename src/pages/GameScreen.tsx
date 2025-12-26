@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { Loader2, Moon, Volume2, VolumeX, Sparkles, Eye, EyeOff, ChevronRight, Check } from 'lucide-react';
+import { Loader2, Moon, Volume2, VolumeX, Sparkles, Eye, EyeOff, ChevronRight, Check, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { triggerVibration } from '@/lib/haptics';
 import { useToast } from '@/hooks/use-toast';
@@ -49,6 +49,7 @@ const GameScreen = () => {
   const [session, setSession] = useState<GameSession | null>(null);
   const [playerRole, setPlayerRole] = useState<PlayerRole | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [playerRoles, setPlayerRoles] = useState<Record<string, string>>({}); // player_id -> base_role
   const [loading, setLoading] = useState(true);
   const [isHost, setIsHost] = useState(false);
   const [roleRevealed, setRoleRevealed] = useState(false);
@@ -63,19 +64,21 @@ const GameScreen = () => {
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [hasVoted, setHasVoted] = useState(false);
   const [isAdvancing, setIsAdvancing] = useState(false);
+  
+  // Vote tracking for host blocking
+  const [currentPhaseVoteCount, setCurrentPhaseVoteCount] = useState(0);
+  const [requiredVoteCount, setRequiredVoteCount] = useState(0);
 
   const playerId = localStorage.getItem('player_id');
 
-  // Determine if current user is host - verify from database, not localStorage
+  // Determine if current user is host - verify from database
   useEffect(() => {
     if (!code) return;
     
     const verifyHost = async () => {
-      // Check localStorage first as a hint (for faster UX), but verify from DB
       const hostHint = localStorage.getItem('is_host') === 'true';
       
       if (hostHint) {
-        // Verify host status from database
         const { data: room } = await supabase
           .from('game_rooms')
           .select('id')
@@ -83,7 +86,6 @@ const GameScreen = () => {
           .maybeSingle();
         
         if (room) {
-          // Check if there's a host player for this room (Narrator)
           const { data: hostPlayer } = await supabase
             .from('players')
             .select('id')
@@ -91,8 +93,6 @@ const GameScreen = () => {
             .eq('is_host', true)
             .maybeSingle();
           
-          // Only set as host if localStorage hint matches reality
-          // In a party game, we verify the host player exists
           setIsHost(!!hostPlayer && hostHint);
         } else {
           setIsHost(false);
@@ -143,11 +143,24 @@ const GameScreen = () => {
         .maybeSingle();
 
       if (sessionData) {
-        // Parse timeline if it's a string
         const timeline = typeof sessionData.timeline === 'string' 
           ? JSON.parse(sessionData.timeline) 
           : sessionData.timeline;
         setSession({ ...sessionData, timeline } as GameSession);
+
+        // Fetch ALL player roles for this session (needed for vote counting)
+        const { data: allRolesData } = await supabase
+          .from('player_roles')
+          .select('player_id, base_role')
+          .eq('session_id', sessionData.id);
+
+        if (allRolesData) {
+          const rolesMap: Record<string, string> = {};
+          for (const r of allRolesData) {
+            rolesMap[r.player_id] = r.base_role;
+          }
+          setPlayerRoles(rolesMap);
+        }
 
         if (playerId) {
           const { data: roleData } = await supabase
@@ -167,6 +180,83 @@ const GameScreen = () => {
 
     fetchData();
   }, [code, playerId]);
+
+  // Get current timeline item
+  const currentTimelineItem = session?.timeline?.[session.timeline_index] ?? null;
+  const isLastItem = session?.timeline && session.timeline_index >= session.timeline.length - 1;
+
+  // Calculate required vote count for current phase
+  useEffect(() => {
+    if (!currentTimelineItem || !playerRoles) {
+      setRequiredVoteCount(0);
+      return;
+    }
+
+    const phase = currentTimelineItem.phase.toLowerCase();
+    const activeRoles = PHASE_ROLE_MAP[phase];
+    
+    if (!activeRoles || currentTimelineItem.action === 'none' || currentTimelineItem.action === 'reveal') {
+      setRequiredVoteCount(0);
+      return;
+    }
+
+    // Count players with active roles
+    const count = Object.values(playerRoles).filter(role => activeRoles.includes(role)).length;
+    setRequiredVoteCount(count);
+  }, [currentTimelineItem, playerRoles]);
+
+  // Subscribe to votes table for real-time vote counting (HOST BLOCKING LOGIC)
+  useEffect(() => {
+    if (!session?.id || !roomId || !currentTimelineItem) return;
+
+    const currentPhase = currentTimelineItem.phase;
+    
+    // Initial fetch of votes for current phase
+    const fetchVotes = async () => {
+      const { data: votes, error } = await supabase
+        .from('votes')
+        .select('id')
+        .eq('session_id', session.id)
+        .eq('phase', currentPhase);
+
+      if (!error && votes) {
+        setCurrentPhaseVoteCount(votes.length);
+      }
+    };
+
+    fetchVotes();
+
+    // Subscribe to new votes
+    const channel = supabase
+      .channel(`votes-${session.id}-${currentPhase}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'votes',
+          filter: `session_id=eq.${session.id}`,
+        },
+        (payload) => {
+          console.log('New vote:', payload);
+          if ((payload.new as any).phase === currentPhase) {
+            setCurrentPhaseVoteCount(prev => prev + 1);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session?.id, roomId, currentTimelineItem?.phase]);
+
+  // Reset vote count when phase changes
+  useEffect(() => {
+    setCurrentPhaseVoteCount(0);
+    setHasVoted(false);
+    setSelectedTarget(null);
+  }, [session?.timeline_index]);
 
   // Realtime subscription for session updates
   useEffect(() => {
@@ -193,14 +283,10 @@ const GameScreen = () => {
             if (!prev) return null;
             const updated = { ...prev, ...newData, timeline };
             
-            // Check if timeline advanced and vibrate if it's player's turn
             if (updated.timeline_index !== prev.timeline_index) {
               const currentItem = updated.timeline?.[updated.timeline_index];
               if (currentItem) {
                 checkAndVibrate(currentItem.phase);
-                // Reset voting state for new phase
-                setHasVoted(false);
-                setSelectedTarget(null);
               }
             }
             return updated;
@@ -225,16 +311,18 @@ const GameScreen = () => {
     }
   }, [playerRole]);
 
-  // Get current timeline item
-  const currentTimelineItem = session?.timeline?.[session.timeline_index] ?? null;
-  const isLastItem = session?.timeline && session.timeline_index >= session.timeline.length - 1;
-
   // Check if player is active for current phase
   const isPlayerActive = useCallback(() => {
     if (!playerRole || !currentTimelineItem) return false;
     const activeRoles = PHASE_ROLE_MAP[currentTimelineItem.phase.toLowerCase()];
     return activeRoles?.includes(playerRole.base_role) ?? false;
   }, [playerRole, currentTimelineItem]);
+
+  // Determine if Next button should be enabled
+  const isActionPhase = currentTimelineItem?.action && 
+    ['vote_kill', 'vote_save', 'reveal_role'].includes(currentTimelineItem.action);
+  const allVotesIn = requiredVoteCount > 0 && currentPhaseVoteCount >= requiredVoteCount;
+  const canAdvance = !isActionPhase || allVotesIn;
 
   // Play TTS audio via edge function
   const playAudio = useCallback(async (text: string, voice: string) => {
@@ -291,13 +379,12 @@ const GameScreen = () => {
     setIsSpeaking(false);
   }, []);
 
-  // Host advances timeline - with server-side verification
+  // Host advances timeline - with blocking logic
   const advanceTimeline = useCallback(async () => {
-    if (!session || isLastItem || isAdvancing || !roomId) return;
+    if (!session || isLastItem || isAdvancing || !roomId || !canAdvance) return;
 
     setIsAdvancing(true);
     try {
-      // Verify host status from database before allowing timeline advance
       const { data: hostPlayer } = await supabase
         .from('players')
         .select('id')
@@ -328,14 +415,13 @@ const GameScreen = () => {
     } finally {
       setIsAdvancing(false);
     }
-  }, [session, isLastItem, isAdvancing, roomId, toast]);
+  }, [session, isLastItem, isAdvancing, roomId, canAdvance, toast]);
 
-  // Submit vote - with player verification
+  // Submit vote
   const submitVote = useCallback(async () => {
     if (!session || !roomId || !playerId || !selectedTarget || hasVoted) return;
 
     try {
-      // Verify player exists in this room before allowing vote
       const { data: voter } = await supabase
         .from('players')
         .select('id')
@@ -347,7 +433,6 @@ const GameScreen = () => {
         throw new Error('You are not a valid player in this game');
       }
 
-      // Verify target player exists
       const { data: target } = await supabase
         .from('players')
         .select('id')
@@ -361,14 +446,12 @@ const GameScreen = () => {
 
       const { error } = await supabase
         .from('votes')
-        .upsert({
+        .insert({
           room_id: roomId,
           session_id: session.id,
           phase: currentTimelineItem?.phase ?? session.phase,
           voter_player_id: playerId,
           target_player_id: selectedTarget,
-        }, {
-          onConflict: 'session_id,phase,voter_player_id',
         });
 
       if (error) throw error;
@@ -403,7 +486,7 @@ const GameScreen = () => {
     );
   }
 
-  // HOST VIEW - Interactive Timeline
+  // HOST VIEW - Interactive Timeline with Blocking Logic
   if (isHost) {
     return (
       <div className="h-full bg-background px-4 py-6 flex flex-col overflow-hidden">
@@ -479,21 +562,42 @@ const GameScreen = () => {
             )}
           </div>
 
-          {/* Next Button */}
+          {/* Vote Status (only for action phases) */}
+          {isActionPhase && requiredVoteCount > 0 && (
+            <div className="bg-card/30 border border-border rounded-xl p-4 w-full text-center">
+              <p className="text-sm text-muted-foreground">
+                Votes received: <span className="font-bold text-foreground">{currentPhaseVoteCount}</span> / {requiredVoteCount}
+              </p>
+              {!allVotesIn && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Waiting for all players to vote...
+                </p>
+              )}
+              {allVotesIn && (
+                <p className="text-xs text-primary mt-1 font-medium">
+                  All votes in! You can proceed.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Next Button with Blocking Logic */}
           {!isLastItem && (
             <Button
               onClick={advanceTimeline}
               size="lg"
               variant="outline"
               className="gap-2"
-              disabled={isAdvancing || isSpeaking}
+              disabled={isAdvancing || isSpeaking || !canAdvance}
             >
               {isAdvancing ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
+              ) : !canAdvance ? (
+                <Lock className="w-5 h-5" />
               ) : (
                 <ChevronRight className="w-5 h-5" />
               )}
-              Next
+              {!canAdvance ? 'Waiting for Votes' : 'Next'}
             </Button>
           )}
 
