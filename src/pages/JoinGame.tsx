@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGameRoom } from '@/hooks/useGameRoom';
 import { JoinForm } from '@/components/JoinForm';
@@ -6,6 +6,7 @@ import { PlayerGrid } from '@/components/PlayerGrid';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Sparkles, Loader2, CheckCircle2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 const JoinGame = () => {
   const { code } = useParams<{ code: string }>();
@@ -21,12 +22,50 @@ const JoinGame = () => {
     }
   }, [code]);
 
-  // Navigate to game when room status changes to 'playing'
-  useEffect(() => {
-    if (room?.status === 'playing' && code) {
-      navigate(`/game/${code.toUpperCase()}`);
+  // Aggressive navigation when room status changes to 'playing'
+  const navigateToGame = useCallback(() => {
+    if (code) {
+      console.log('Navigating to game screen...');
+      navigate(`/game/${code.toUpperCase()}`, { replace: true });
     }
-  }, [room?.status, code, navigate]);
+  }, [code, navigate]);
+
+  // Watch for room status change
+  useEffect(() => {
+    if (room?.status === 'playing') {
+      navigateToGame();
+    }
+  }, [room?.status, navigateToGame]);
+
+  // Extra aggressive: Direct realtime subscription for room status
+  useEffect(() => {
+    if (!room?.id) return;
+
+    const channel = supabase
+      .channel(`aggressive-room-status-${room.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'game_rooms',
+          filter: `id=eq.${room.id}`,
+        },
+        (payload) => {
+          console.log('Direct subscription: Room updated', payload);
+          if (payload.new && (payload.new as any).status === 'playing') {
+            navigateToGame();
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [room?.id, navigateToGame]);
 
   const handleJoin = async (name: string, avatarFile: File | null) => {
     if (!room) return;
@@ -40,9 +79,8 @@ const JoinGame = () => {
       }
 
       const player = await addPlayer(room.id, name, avatarUrl);
-      // Store player ID for role lookup on game screen
       localStorage.setItem('player_id', player.id);
-      localStorage.removeItem('is_host'); // Ensure they're marked as player, not host
+      localStorage.removeItem('is_host');
       setHasJoined(true);
       toast({ title: 'Welcome to the game!', description: 'Waiting for host to start' });
     } catch (err: any) {
@@ -52,7 +90,6 @@ const JoinGame = () => {
     }
   };
 
-  // Filter out current player (show only others)
   const otherPlayers = players.filter(p => !p.is_host);
 
   if (loading) {
@@ -89,7 +126,7 @@ const JoinGame = () => {
           </h1>
           <p className="text-sm text-muted-foreground">Room: {room.room_code}</p>
         </div>
-        <div className="w-10" /> {/* Spacer for centering */}
+        <div className="w-10" />
       </header>
 
       <main className="flex-1 max-w-md mx-auto w-full overflow-y-auto">
@@ -101,6 +138,15 @@ const JoinGame = () => {
               <CheckCircle2 className="w-14 h-14 text-primary mx-auto mb-3" />
               <h2 className="text-2xl font-bold glow-text">You're In!</h2>
               <p className="text-muted-foreground mt-2">Waiting for the host to start the game...</p>
+              
+              {/* Manual fallback button */}
+              <Button 
+                variant="outline" 
+                className="mt-4"
+                onClick={navigateToGame}
+              >
+                Enter Game Manually
+              </Button>
             </div>
 
             {otherPlayers.length > 0 && (

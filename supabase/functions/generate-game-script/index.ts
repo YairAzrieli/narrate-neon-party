@@ -20,14 +20,34 @@ interface RoleAssignment {
   themedRole: string;
 }
 
+interface RoleCounts {
+  werewolves: number;
+  doctors: number;
+  seers: number;
+  villagers: number;
+}
+
+interface CustomRoleNames {
+  werewolf?: string;
+  doctor?: string;
+  seer?: string;
+  villager?: string;
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { room_id, theme } = await req.json();
+    const { 
+      room_id, 
+      theme, 
+      language = 'en',
+      game_mode = 'mafia',
+      role_counts,
+      custom_role_names 
+    } = await req.json();
     
     if (!room_id || !theme) {
       throw new Error('room_id and theme are required');
@@ -38,16 +58,14 @@ serve(async (req) => {
       throw new Error('OPENAI_API_KEY is not configured');
     }
 
-    // Initialize clients
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
     if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-      throw new Error('Backend keys are not configured (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY)');
+      throw new Error('Backend keys are not configured');
     }
 
-    // Standard client (respects RLS)
     const supabase = createClient(supabaseUrl, anonKey, {
       global: {
         headers: {
@@ -56,7 +74,6 @@ serve(async (req) => {
       },
     });
 
-    // Admin client (bypasses RLS) - used for critical status update
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     // Fetch all players (excluding host)
@@ -75,12 +92,38 @@ serve(async (req) => {
     }
 
     console.log(`Found ${players.length} players for room ${room_id}`);
+    console.log('Settings:', { language, game_mode, role_counts, custom_role_names });
 
-    // Assign base roles
-    const roleAssignments = assignRoles(players);
+    // Assign base roles with custom counts if provided
+    const roleAssignments = assignRoles(players, role_counts);
     console.log('Role assignments:', roleAssignments);
 
-    // Call OpenAI to generate themed roles and opening script
+    // Build the language instruction
+    const languageInstruction = language === 'he' 
+      ? 'IMPORTANT: Your ENTIRE response (all role names, opening script, everything) MUST be in Hebrew (עברית). Write naturally in Hebrew.'
+      : 'Respond in English.';
+
+    // Build custom role names instruction if provided
+    let customNamesInstruction = '';
+    if (custom_role_names && Object.values(custom_role_names).some(v => v)) {
+      const mappings: string[] = [];
+      if (custom_role_names.werewolf) mappings.push(`Werewolf → "${custom_role_names.werewolf}"`);
+      if (custom_role_names.doctor) mappings.push(`Doctor → "${custom_role_names.doctor}"`);
+      if (custom_role_names.seer) mappings.push(`Seer → "${custom_role_names.seer}"`);
+      if (custom_role_names.villager) mappings.push(`Villager → "${custom_role_names.villager}"`);
+      
+      customNamesInstruction = `
+IMPORTANT: The host has provided custom role names. Use these EXACT names instead of inventing new ones:
+${mappings.join('\n')}
+
+For any roles not listed above, you may create themed names.`;
+    }
+
+    const gameModeInstruction = game_mode === 'one_night'
+      ? 'This is a ONE NIGHT game - all actions happen in a single round, then everyone votes.'
+      : 'This is a continuous MAFIA-style game - players are eliminated each round.';
+
+    // Call OpenAI
     const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -96,6 +139,10 @@ serve(async (req) => {
 1. Reinvent the game roles based on the given theme
 2. Generate a short, funny, and dramatic opening narration for the "Night" phase
 
+${languageInstruction}
+${gameModeInstruction}
+${customNamesInstruction}
+
 Be creative and entertaining! The narration should be 2-3 sentences max.`
           },
           {
@@ -110,6 +157,7 @@ Please respond in this exact JSON format:
   "themedRoles": {
     "Werewolf": "themed name for werewolf",
     "Doctor": "themed name for doctor",
+    "Seer": "themed name for seer",
     "Villager": "themed name for villager"
   },
   "openingScript": "Your dramatic opening narration here..."
@@ -134,7 +182,6 @@ Please respond in this exact JSON format:
     // Parse AI response
     let parsedAI;
     try {
-      // Extract JSON from response (in case there's extra text)
       const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         parsedAI = JSON.parse(jsonMatch[0]);
@@ -143,15 +190,25 @@ Please respond in this exact JSON format:
       }
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
-      // Fallback to simple themed names
       parsedAI = {
         themedRoles: {
-          Werewolf: `${theme} Traitor`,
-          Doctor: `${theme} Healer`,
-          Villager: `${theme} Member`
+          Werewolf: custom_role_names?.werewolf || `${theme} Traitor`,
+          Doctor: custom_role_names?.doctor || `${theme} Healer`,
+          Seer: custom_role_names?.seer || `${theme} Oracle`,
+          Villager: custom_role_names?.villager || `${theme} Member`
         },
-        openingScript: `Welcome to the world of ${theme}! As darkness falls, secrets lurk in every shadow. Someone among you is not who they seem...`
+        openingScript: language === 'he' 
+          ? `ברוכים הבאים לעולם של ${theme}! כשהחושך יורד, סודות אורבים בכל צל. מישהו ביניכם אינו מי שהוא נראה...`
+          : `Welcome to the world of ${theme}! As darkness falls, secrets lurk in every shadow. Someone among you is not who they seem...`
       };
+    }
+
+    // Apply custom names if provided
+    if (custom_role_names) {
+      if (custom_role_names.werewolf) parsedAI.themedRoles.Werewolf = custom_role_names.werewolf;
+      if (custom_role_names.doctor) parsedAI.themedRoles.Doctor = custom_role_names.doctor;
+      if (custom_role_names.seer) parsedAI.themedRoles.Seer = custom_role_names.seer;
+      if (custom_role_names.villager) parsedAI.themedRoles.Villager = custom_role_names.villager;
     }
 
     // Create game session
@@ -188,8 +245,7 @@ Please respond in this exact JSON format:
       throw new Error(`Failed to save player roles: ${rolesError.message}`);
     }
 
-    // Update room status to 'playing' - CRITICAL for triggering navigation
-    // Use admin client so this works even when called by anonymous players.
+    // Update room status using admin client (bypasses RLS)
     const { error: statusError } = await supabaseAdmin
       .from('game_rooms')
       .update({ status: 'playing' })
@@ -222,17 +278,28 @@ Please respond in this exact JSON format:
   }
 });
 
-function assignRoles(players: Player[]): RoleAssignment[] {
+function assignRoles(players: Player[], roleCounts?: RoleCounts): RoleAssignment[] {
   const shuffled = [...players].sort(() => Math.random() - 0.5);
   const assignments: RoleAssignment[] = [];
 
-  // Calculate number of werewolves (1 per 4 players, minimum 1)
-  const numWerewolves = Math.max(1, Math.floor(shuffled.length / 4));
-  // Always have 1 doctor if there are at least 3 players
-  const hasDoctor = shuffled.length >= 3;
+  // Use provided counts or calculate defaults
+  let numWerewolves = roleCounts?.werewolves ?? Math.max(1, Math.floor(shuffled.length / 4));
+  let numDoctors = roleCounts?.doctors ?? (shuffled.length >= 3 ? 1 : 0);
+  let numSeers = roleCounts?.seers ?? (shuffled.length >= 5 ? 1 : 0);
+
+  // Clamp to available players
+  const totalSpecialRoles = numWerewolves + numDoctors + numSeers;
+  if (totalSpecialRoles > shuffled.length) {
+    // Scale down proportionally
+    const scale = shuffled.length / totalSpecialRoles;
+    numWerewolves = Math.max(1, Math.floor(numWerewolves * scale));
+    numDoctors = Math.floor(numDoctors * scale);
+    numSeers = Math.floor(numSeers * scale);
+  }
 
   let werewolvesAssigned = 0;
-  let doctorAssigned = false;
+  let doctorsAssigned = 0;
+  let seersAssigned = 0;
 
   for (const player of shuffled) {
     let role: string;
@@ -240,9 +307,12 @@ function assignRoles(players: Player[]): RoleAssignment[] {
     if (werewolvesAssigned < numWerewolves) {
       role = 'Werewolf';
       werewolvesAssigned++;
-    } else if (!doctorAssigned && hasDoctor) {
+    } else if (doctorsAssigned < numDoctors) {
       role = 'Doctor';
-      doctorAssigned = true;
+      doctorsAssigned++;
+    } else if (seersAssigned < numSeers) {
+      role = 'Seer';
+      seersAssigned++;
     } else {
       role = 'Villager';
     }
@@ -251,7 +321,7 @@ function assignRoles(players: Player[]): RoleAssignment[] {
       playerId: player.id,
       playerName: player.name,
       baseRole: role,
-      themedRole: role, // Will be updated by AI
+      themedRole: role,
     });
   }
 

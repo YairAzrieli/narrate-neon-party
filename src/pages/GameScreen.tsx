@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { Loader2, Moon, Volume2, VolumeX, Sparkles } from 'lucide-react';
+import { Loader2, Moon, Volume2, VolumeX, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { triggerVibration } from '@/lib/haptics';
 
 interface GameSession {
   id: string;
@@ -16,17 +17,27 @@ interface PlayerRole {
   themed_role: string;
 }
 
+// Map phases to roles that should be alerted
+const PHASE_ROLE_MAP: Record<string, string[]> = {
+  'wolves': ['Werewolf'],
+  'werewolves': ['Werewolf'],
+  'doctor': ['Doctor'],
+  'seer': ['Seer'],
+};
+
 const GameScreen = () => {
   const { code } = useParams<{ code: string }>();
   const [session, setSession] = useState<GameSession | null>(null);
   const [playerRole, setPlayerRole] = useState<PlayerRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [isHost, setIsHost] = useState(false);
+  const [roleRevealed, setRoleRevealed] = useState(false);
   
   // TTS state
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [hasSpoken, setHasSpoken] = useState(false);
   const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const lastPhaseRef = useRef<string | null>(null);
 
   // Determine if current user is host
   useEffect(() => {
@@ -39,7 +50,6 @@ const GameScreen = () => {
     if (!code) return;
 
     const fetchData = async () => {
-      // Get room ID from code
       const { data: room } = await supabase
         .from('game_rooms')
         .select('id')
@@ -51,7 +61,6 @@ const GameScreen = () => {
         return;
       }
 
-      // Get the latest game session
       const { data: sessionData } = await supabase
         .from('game_sessions')
         .select('*')
@@ -63,7 +72,6 @@ const GameScreen = () => {
       if (sessionData) {
         setSession(sessionData);
 
-        // If player (not host), fetch their role
         const playerId = localStorage.getItem('player_id');
         if (playerId) {
           const { data: roleData } = await supabase
@@ -84,6 +92,17 @@ const GameScreen = () => {
     fetchData();
   }, [code]);
 
+  // Check if it's the player's turn and vibrate
+  const checkAndVibrate = useCallback((phase: string) => {
+    if (!playerRole) return;
+    
+    const activeRoles = PHASE_ROLE_MAP[phase.toLowerCase()];
+    if (activeRoles && activeRoles.includes(playerRole.base_role)) {
+      console.log('Your turn! Vibrating...');
+      triggerVibration([200, 100, 200]);
+    }
+  }, [playerRole]);
+
   // Realtime subscription for phase changes
   useEffect(() => {
     if (!session?.id) return;
@@ -100,7 +119,14 @@ const GameScreen = () => {
         },
         (payload) => {
           console.log('Session updated:', payload);
-          setSession((prev) => prev ? { ...prev, ...payload.new } : null);
+          const newSession = payload.new as GameSession;
+          setSession((prev) => prev ? { ...prev, ...newSession } : null);
+          
+          // Check for phase change and vibrate if it's player's turn
+          if (newSession.phase !== lastPhaseRef.current) {
+            lastPhaseRef.current = newSession.phase;
+            checkAndVibrate(newSession.phase);
+          }
         }
       )
       .subscribe();
@@ -108,16 +134,15 @@ const GameScreen = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session?.id]);
+  }, [session?.id, checkAndVibrate]);
 
-  // Text-to-Speech function
+  // TTS function
   const speak = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) {
       console.error('Speech synthesis not supported');
       return;
     }
 
-    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
@@ -150,6 +175,11 @@ const GameScreen = () => {
     }
   };
 
+  const handleRevealRole = () => {
+    setRoleRevealed(true);
+    triggerVibration([100]);
+  };
+
   if (loading) {
     return (
       <div className="h-full bg-background flex items-center justify-center">
@@ -166,7 +196,7 @@ const GameScreen = () => {
     );
   }
 
-  // HOST VIEW - Shows script with TTS
+  // HOST VIEW
   if (isHost) {
     return (
       <div className="h-full bg-background px-4 py-6 flex flex-col overflow-hidden">
@@ -179,7 +209,6 @@ const GameScreen = () => {
         </header>
 
         <main className="flex-1 flex flex-col items-center justify-center max-w-lg mx-auto w-full gap-6">
-          {/* Audio Controls */}
           <div className="flex gap-3">
             {!isSpeaking ? (
               <Button
@@ -203,7 +232,6 @@ const GameScreen = () => {
             )}
           </div>
 
-          {/* Speaking Indicator */}
           {isSpeaking && (
             <div className="flex items-center gap-2 text-primary animate-pulse">
               <div className="flex gap-1">
@@ -217,7 +245,6 @@ const GameScreen = () => {
             </div>
           )}
 
-          {/* Script Display */}
           <div className="bg-card/50 border border-border rounded-2xl p-6 text-center">
             <p className="text-lg leading-relaxed text-foreground">
               {session.script || 'The night has begun...'}
@@ -228,7 +255,7 @@ const GameScreen = () => {
     );
   }
 
-  // PLAYER VIEW - Shows their role
+  // PLAYER VIEW
   return (
     <div className="h-full bg-background px-4 py-6 flex flex-col overflow-hidden">
       <header className="text-center mb-8 shrink-0">
@@ -242,28 +269,50 @@ const GameScreen = () => {
       <main className="flex-1 flex flex-col items-center justify-center max-w-sm mx-auto w-full">
         {playerRole ? (
           <div className="w-full">
-            {/* Role Card */}
-            <div className="bg-gradient-to-br from-primary/20 to-primary/5 border-2 border-primary/30 rounded-3xl p-8 text-center shadow-lg shadow-primary/10">
-              <Sparkles className="w-12 h-12 text-primary mx-auto mb-4" />
-              
-              <p className="text-muted-foreground text-sm uppercase tracking-wider mb-2">
-                Your Secret Role
-              </p>
-              
-              <h2 className="text-3xl font-extrabold text-foreground mb-2">
-                {playerRole.themed_role}
-              </h2>
-              
-              <p className="text-muted-foreground text-sm">
-                ({playerRole.base_role})
-              </p>
-
-              <div className="mt-6 pt-6 border-t border-border/50">
-                <p className="text-sm text-muted-foreground">
-                  Keep this secret! Close your eyes and listen to the narrator.
+            {!roleRevealed ? (
+              // Tap to reveal
+              <button
+                onClick={handleRevealRole}
+                className="w-full bg-gradient-to-br from-primary/20 to-primary/5 border-2 border-primary/30 rounded-3xl p-8 text-center shadow-lg shadow-primary/10 transition-transform active:scale-95"
+              >
+                <EyeOff className="w-12 h-12 text-primary mx-auto mb-4" />
+                <p className="text-xl font-bold text-foreground mb-2">Your Role is Hidden</p>
+                <p className="text-muted-foreground text-sm">Tap to reveal your secret role</p>
+              </button>
+            ) : (
+              // Role Card
+              <div className="bg-gradient-to-br from-primary/20 to-primary/5 border-2 border-primary/30 rounded-3xl p-8 text-center shadow-lg shadow-primary/10">
+                <Sparkles className="w-12 h-12 text-primary mx-auto mb-4" />
+                
+                <p className="text-muted-foreground text-sm uppercase tracking-wider mb-2">
+                  Your Secret Role
                 </p>
+                
+                <h2 className="text-3xl font-extrabold text-foreground mb-2">
+                  {playerRole.themed_role}
+                </h2>
+                
+                <p className="text-muted-foreground text-sm">
+                  ({playerRole.base_role})
+                </p>
+
+                <div className="mt-6 pt-6 border-t border-border/50">
+                  <p className="text-sm text-muted-foreground">
+                    Keep this secret! Close your eyes and listen to the narrator.
+                  </p>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-4 gap-2"
+                  onClick={() => setRoleRevealed(false)}
+                >
+                  <Eye className="w-4 h-4" />
+                  Hide Role
+                </Button>
               </div>
-            </div>
+            )}
           </div>
         ) : (
           <div className="text-center">
