@@ -1,8 +1,9 @@
 import { QRCodeSVG } from 'qrcode.react';
 import { getJoinUrl } from '@/lib/gameUtils';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Share2 } from 'lucide-react';
 import { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
+import { Button } from '@/components/ui/button';
 
 interface RoomDisplayProps {
   roomCode: string;
@@ -18,6 +19,27 @@ export const RoomDisplay = ({ roomCode }: RoomDisplayProps) => {
     setCopied(true);
     toast({ title: 'Room code copied!' });
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Join my Narrator AI game!',
+          text: `Join my game with code: ${roomCode}`,
+          url: joinUrl,
+        });
+      } catch (err) {
+        // User cancelled or share failed, fallback to copy
+        if ((err as Error).name !== 'AbortError') {
+          copyCode();
+        }
+      }
+    } else {
+      // Fallback for browsers without Web Share API
+      await navigator.clipboard.writeText(joinUrl);
+      toast({ title: 'Link copied to clipboard!' });
+    }
   };
 
   return (
@@ -49,6 +71,15 @@ export const RoomDisplay = ({ roomCode }: RoomDisplayProps) => {
           )}
         </button>
       </div>
+
+      <Button
+        onClick={handleShare}
+        variant="secondary"
+        className="w-full gap-2"
+      >
+        <Share2 className="w-4 h-4" />
+        Share Invite Link
+      </Button>
     </div>
   );
 };
