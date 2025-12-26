@@ -21,6 +21,7 @@ export type Database = {
           id: string
           room_code: string
           status: string
+          theme: string | null
           updated_at: string
         }
         Insert: {
@@ -29,6 +30,7 @@ export type Database = {
           id?: string
           room_code: string
           status?: string
+          theme?: string | null
           updated_at?: string
         }
         Update: {
@@ -37,6 +39,7 @@ export type Database = {
           id?: string
           room_code?: string
           status?: string
+          theme?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -45,6 +48,7 @@ export type Database = {
         Row: {
           avatar_url: string | null
           id: string
+          is_host: boolean
           joined_at: string
           name: string
           room_id: string
@@ -52,6 +56,7 @@ export type Database = {
         Insert: {
           avatar_url?: string | null
           id?: string
+          is_host?: boolean
           joined_at?: string
           name: string
           room_id: string
@@ -59,6 +64,7 @@ export type Database = {
         Update: {
           avatar_url?: string | null
           id?: string
+          is_host?: boolean
           joined_at?: string
           name?: string
           room_id?: string
