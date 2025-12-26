@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { useGameRoom } from '@/hooks/useGameRoom';
 import { RoomDisplay } from '@/components/RoomDisplay';
 import { PlayerGrid } from '@/components/PlayerGrid';
+import { GameSettings, GameSettingsData } from '@/components/GameSettings';
 import { Loader2, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
@@ -13,6 +14,7 @@ const Lobby = () => {
   const [gameCode, setGameCode] = useState('');
   const [theme, setTheme] = useState('');
   const [isStarting, setIsStarting] = useState(false);
+  const [gameSettings, setGameSettings] = useState<GameSettingsData | null>(null);
   const { room, players, loading, error, createRoom, joinRoom } = useGameRoom();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -20,14 +22,13 @@ const Lobby = () => {
   // Navigate to game when room status changes to 'playing'
   useEffect(() => {
     if (room?.status === 'playing') {
-      navigate(`/game/${room.room_code}`);
+      navigate(`/game/${room.room_code}`, { replace: true });
     }
   }, [room?.status, room?.room_code, navigate]);
 
   const handleCreateGame = async () => {
     const newRoom = await createRoom();
     if (newRoom) {
-      // Mark this device as the host
       localStorage.setItem('is_host', 'true');
       localStorage.removeItem('player_id');
       toast({ title: 'Game created!', description: 'Share the code with friends' });
@@ -48,7 +49,6 @@ const Lobby = () => {
     }
   };
 
-  // Filter out host from displayed players
   const activePlayers = players.filter(p => !p.is_host);
 
   const handleStartGame = async () => {
@@ -64,16 +64,37 @@ const Lobby = () => {
 
     setIsStarting(true);
     try {
+      // Build request body with settings
+      const requestBody: Record<string, any> = { 
+        room_id: room.id, 
+        theme: theme.trim() 
+      };
+
+      if (gameSettings) {
+        requestBody.language = gameSettings.language;
+        requestBody.game_mode = gameSettings.gameMode;
+        requestBody.role_counts = gameSettings.roleCounts;
+        
+        if (gameSettings.useCustomNames) {
+          requestBody.custom_role_names = {
+            werewolf: gameSettings.customRoleNames.werewolf || undefined,
+            doctor: gameSettings.customRoleNames.doctor || undefined,
+            seer: gameSettings.customRoleNames.seer || undefined,
+            villager: gameSettings.customRoleNames.villager || undefined,
+          };
+        }
+      }
+
       const { data, error: fnError } = await supabase.functions.invoke('generate-game-script', {
-        body: { room_id: room.id, theme: theme.trim() }
+        body: requestBody
       });
 
       if (fnError) throw fnError;
       if (data?.error) throw new Error(data.error);
 
       toast({ title: 'Game Started!', description: 'The night phase begins...' });
-      // Aggressive navigation for host: don't wait for realtime
-      navigate(`/game/${room.room_code}`);
+      // Aggressive navigation for host
+      navigate(`/game/${room.room_code}`, { replace: true });
       console.log('Game session created:', data);
     } catch (err: any) {
       console.error('Start game error:', err);
@@ -133,7 +154,7 @@ const Lobby = () => {
             )}
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-6 pb-4">
             <RoomDisplay roomCode={room.room_code} />
             
             <div className="space-y-3">
@@ -154,6 +175,12 @@ const Lobby = () => {
                 className="text-center"
               />
             </div>
+
+            {/* Game Settings Section */}
+            <GameSettings 
+              playerCount={activePlayers.length || 1}
+              onSettingsChange={setGameSettings}
+            />
 
             <Button 
               className="w-full text-lg py-6" 
