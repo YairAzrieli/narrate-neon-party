@@ -46,8 +46,11 @@ serve(async (req) => {
       language = 'en',
       game_mode = 'mafia',
       role_counts,
-      custom_role_names 
+      custom_role_names,
+      custom_role_map,
     } = await req.json();
+
+    const effectiveCustomRoleNames: CustomRoleNames | undefined = custom_role_names ?? custom_role_map;
     
     if (!room_id || !theme) {
       throw new Error('room_id and theme are required');
@@ -92,7 +95,7 @@ serve(async (req) => {
     }
 
     console.log(`Found ${players.length} players for room ${room_id}`);
-    console.log('Settings:', { language, game_mode, role_counts, custom_role_names });
+    console.log('Settings:', { language, game_mode, role_counts, effectiveCustomRoleNames });
 
     // Assign base roles with custom counts if provided
     const roleAssignments = assignRoles(players, role_counts);
@@ -100,18 +103,18 @@ serve(async (req) => {
 
     // Build the language instruction
     const languageInstruction = language === 'he' 
-      ? 'IMPORTANT: Your ENTIRE response (all role names, opening script, everything) MUST be in Hebrew (עברית). Write naturally in Hebrew.'
+      ? 'IMPORTANT: Your ENTIRE response (all role names, narration, everything) MUST be in Hebrew (עברית). Write naturally in Hebrew.'
       : 'Respond in English.';
 
     // Build custom role names instruction if provided
     let customNamesInstruction = '';
-    if (custom_role_names && Object.values(custom_role_names).some(v => v)) {
+    if (effectiveCustomRoleNames && Object.values(effectiveCustomRoleNames).some(v => v)) {
       const mappings: string[] = [];
-      if (custom_role_names.werewolf) mappings.push(`Werewolf → "${custom_role_names.werewolf}"`);
-      if (custom_role_names.doctor) mappings.push(`Doctor → "${custom_role_names.doctor}"`);
-      if (custom_role_names.seer) mappings.push(`Seer → "${custom_role_names.seer}"`);
-      if (custom_role_names.villager) mappings.push(`Villager → "${custom_role_names.villager}"`);
-      
+      if (effectiveCustomRoleNames.werewolf) mappings.push(`Werewolf → "${effectiveCustomRoleNames.werewolf}"`);
+      if (effectiveCustomRoleNames.doctor) mappings.push(`Doctor → "${effectiveCustomRoleNames.doctor}"`);
+      if (effectiveCustomRoleNames.seer) mappings.push(`Seer → "${effectiveCustomRoleNames.seer}"`);
+      if (effectiveCustomRoleNames.villager) mappings.push(`Villager → "${effectiveCustomRoleNames.villager}"`);
+
       customNamesInstruction = `
 IMPORTANT: The host has provided custom role names. Use these EXACT names instead of inventing new ones:
 ${mappings.join('\n')}
@@ -123,7 +126,7 @@ For any roles not listed above, you may create themed names.`;
       ? 'This is a ONE NIGHT game - all actions happen in a single round, then everyone votes.'
       : 'This is a continuous MAFIA-style game - players are eliminated each round.';
 
-    // Call OpenAI
+    // Call OpenAI (structured JSON response)
     const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -131,19 +134,30 @@ For any roles not listed above, you may create themed names.`;
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4.1-2025-04-14',
+        response_format: { type: 'json_object' },
         messages: [
           {
             role: 'system',
-            content: `You are a creative game narrator for a Werewolf-style party game. Your job is to:
-1. Reinvent the game roles based on the given theme
-2. Generate a short, funny, and dramatic opening narration for the "Night" phase
+            content: `You are a creative game narrator for a Werewolf-style party game.
+
+Your job is to:
+1) Create themed role names based on the theme (unless the host provided exact custom names).
+2) Generate a PHASE-BASED timeline for narration and actions.
 
 ${languageInstruction}
 ${gameModeInstruction}
 ${customNamesInstruction}
 
-Be creative and entertaining! The narration should be 2-3 sentences max.`
+Rules:
+- Respond with STRICT VALID JSON only.
+- Do NOT wrap the JSON in markdown.
+- Do NOT include comments.
+- The timeline must be an array named \"timeline\".
+- Each timeline item MUST be an object: { phase, text, voice, action }.
+- voice MUST be one of: \"alloy\" (neutral narrator), \"onyx\" (deep/tough), \"nova\" (soft/calm).
+- action MUST be one of: \"none\", \"vote_kill\", \"vote_save\", \"reveal\".
+- Keep each text short (1-2 sentences).`,
           },
           {
             role: 'user',
@@ -152,73 +166,96 @@ Be creative and entertaining! The narration should be 2-3 sentences max.`
 Players and their base roles:
 ${roleAssignments.map(r => `- ${r.playerName}: ${r.baseRole}`).join('\n')}
 
-Please respond in this exact JSON format:
+Return JSON in this format:
 {
   "themedRoles": {
-    "Werewolf": "themed name for werewolf",
-    "Doctor": "themed name for doctor",
-    "Seer": "themed name for seer",
-    "Villager": "themed name for villager"
+    "Werewolf": "...",
+    "Doctor": "...",
+    "Seer": "...",
+    "Villager": "..."
   },
-  "openingScript": "Your dramatic opening narration here..."
-}`
+  "timeline": [
+    { "phase": "intro", "text": "...", "voice": "alloy", "action": "none" },
+    { "phase": "werewolf", "text": "...", "voice": "onyx", "action": "vote_kill" },
+    { "phase": "doctor", "text": "...", "voice": "nova", "action": "vote_save" },
+    { "phase": "morning", "text": "...", "voice": "alloy", "action": "reveal" }
+  ]
+}
+
+Important:
+- If language is Hebrew, EVERYTHING (all strings) must be Hebrew.
+- If custom role names were provided, use those EXACT names in ALL texts.`
           }
         ],
-        temperature: 0.8,
-        max_tokens: 500,
+        max_completion_tokens: 1200,
       }),
     });
 
     if (!openAIResponse.ok) {
       const errorText = await openAIResponse.text();
       console.error('OpenAI API error:', errorText);
-      throw new Error('Failed to generate game script');
+      throw new Error('Failed to generate game timeline');
     }
 
     const aiData = await openAIResponse.json();
-    const aiContent = aiData.choices[0].message.content;
+    const aiContent = aiData?.choices?.[0]?.message?.content;
     console.log('AI Response:', aiContent);
 
     // Parse AI response
-    let parsedAI;
+    let parsedAI: any;
     try {
-      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsedAI = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found in response');
+      if (!aiContent) throw new Error('Empty AI response');
+      parsedAI = JSON.parse(aiContent);
+      if (!parsedAI?.timeline || !Array.isArray(parsedAI.timeline) || parsedAI.timeline.length === 0) {
+        throw new Error('AI response missing timeline');
       }
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
       parsedAI = {
         themedRoles: {
-          Werewolf: custom_role_names?.werewolf || `${theme} Traitor`,
-          Doctor: custom_role_names?.doctor || `${theme} Healer`,
-          Seer: custom_role_names?.seer || `${theme} Oracle`,
-          Villager: custom_role_names?.villager || `${theme} Member`
+          Werewolf: effectiveCustomRoleNames?.werewolf || `${theme} Traitor`,
+          Doctor: effectiveCustomRoleNames?.doctor || `${theme} Healer`,
+          Seer: effectiveCustomRoleNames?.seer || `${theme} Oracle`,
+          Villager: effectiveCustomRoleNames?.villager || `${theme} Member`,
         },
-        openingScript: language === 'he' 
-          ? `ברוכים הבאים לעולם של ${theme}! כשהחושך יורד, סודות אורבים בכל צל. מישהו ביניכם אינו מי שהוא נראה...`
-          : `Welcome to the world of ${theme}! As darkness falls, secrets lurk in every shadow. Someone among you is not who they seem...`
+        timeline: language === 'he'
+          ? [
+              { phase: 'intro', text: `הלילה יורד על ${theme}... כולם שקטים, אבל מישהו כאן זומם.`, voice: 'alloy', action: 'none' },
+              { phase: 'werewolf', text: `עכשיו אנשי הזאב מתעוררים. בחרו מי ייפגע הלילה.`, voice: 'onyx', action: 'vote_kill' },
+              { phase: 'doctor', text: `הרופא מתעורר. את מי אתם מצילים הלילה?`, voice: 'nova', action: 'vote_save' },
+              { phase: 'morning', text: `הבוקר מגיע... הגיע הזמן לגלות מה קרה.`, voice: 'alloy', action: 'reveal' },
+            ]
+          : [
+              { phase: 'intro', text: `Night falls on ${theme}... everyone is quiet, but someone is plotting.`, voice: 'alloy', action: 'none' },
+              { phase: 'werewolf', text: `Werewolves, wake up. Choose who will be taken tonight.`, voice: 'onyx', action: 'vote_kill' },
+              { phase: 'doctor', text: `Doctor, wake up. Who do you save tonight?`, voice: 'nova', action: 'vote_save' },
+              { phase: 'morning', text: `Morning comes... time to reveal what happened.`, voice: 'alloy', action: 'reveal' },
+            ],
       };
     }
 
-    // Apply custom names if provided
-    if (custom_role_names) {
-      if (custom_role_names.werewolf) parsedAI.themedRoles.Werewolf = custom_role_names.werewolf;
-      if (custom_role_names.doctor) parsedAI.themedRoles.Doctor = custom_role_names.doctor;
-      if (custom_role_names.seer) parsedAI.themedRoles.Seer = custom_role_names.seer;
-      if (custom_role_names.villager) parsedAI.themedRoles.Villager = custom_role_names.villager;
+    // Apply custom names if provided (override themedRoles)
+    if (effectiveCustomRoleNames) {
+      if (effectiveCustomRoleNames.werewolf) parsedAI.themedRoles.Werewolf = effectiveCustomRoleNames.werewolf;
+      if (effectiveCustomRoleNames.doctor) parsedAI.themedRoles.Doctor = effectiveCustomRoleNames.doctor;
+      if (effectiveCustomRoleNames.seer) parsedAI.themedRoles.Seer = effectiveCustomRoleNames.seer;
+      if (effectiveCustomRoleNames.villager) parsedAI.themedRoles.Villager = effectiveCustomRoleNames.villager;
     }
 
     // Create game session
+    const firstTimelineItem = parsedAI.timeline?.[0];
+    const initialPhase = (firstTimelineItem?.phase as string | undefined) ?? 'intro';
+
     const { data: session, error: sessionError } = await supabase
       .from('game_sessions')
       .insert({
         room_id,
         theme,
-        script: parsedAI.openingScript,
-        phase: 'night'
+        // Keep script for backward compatibility / host display
+        script: (firstTimelineItem?.text as string | undefined) ?? null,
+        phase: initialPhase,
+        timeline: parsedAI.timeline,
+        timeline_index: 0,
       })
       .select()
       .single();
@@ -263,7 +300,7 @@ Please respond in this exact JSON format:
       JSON.stringify({
         success: true,
         session_id: session.id,
-        script: parsedAI.openingScript,
+        timeline: parsedAI.timeline,
         themedRoles: parsedAI.themedRoles,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
