@@ -1,10 +1,16 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Loader2, Moon, Volume2, VolumeX, Sparkles, Eye, EyeOff, ChevronRight, Check, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { triggerVibration } from '@/lib/haptics';
 import { useToast } from '@/hooks/use-toast';
+import { PhaseTimer } from '@/components/game/PhaseTimer';
+import { VoteProgress } from '@/components/game/VoteProgress';
+import { SeerRevealModal } from '@/components/game/SeerRevealModal';
+import { MorningReveal } from '@/components/game/MorningReveal';
+import { GameOverScreen } from '@/components/game/GameOverScreen';
+import { useMorningResults } from '@/hooks/useMorningResults';
 
 interface TimelineItem {
   phase: string;
@@ -34,6 +40,14 @@ interface Player {
   avatar_url: string | null;
 }
 
+interface PlayerWithRole extends Player {
+  baseRole: string;
+  themedRole: string;
+  isAlive: boolean;
+  wasKilled: boolean;
+  wasSaved: boolean;
+}
+
 // Map phases to roles that should be active
 const PHASE_ROLE_MAP: Record<string, string[]> = {
   'werewolf': ['Werewolf'],
@@ -45,11 +59,14 @@ const PHASE_ROLE_MAP: Record<string, string[]> = {
 
 const GameScreen = () => {
   const { code } = useParams<{ code: string }>();
+  const navigate = useNavigate();
   const { toast } = useToast();
+  const { calculateResults } = useMorningResults();
+  
   const [session, setSession] = useState<GameSession | null>(null);
   const [playerRole, setPlayerRole] = useState<PlayerRole | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
-  const [playerRoles, setPlayerRoles] = useState<Record<string, string>>({}); // player_id -> base_role
+  const [playerRoles, setPlayerRoles] = useState<Record<string, { base: string; themed: string }>>({}); 
   const [loading, setLoading] = useState(true);
   const [isHost, setIsHost] = useState(false);
   const [roleRevealed, setRoleRevealed] = useState(false);
@@ -68,6 +85,25 @@ const GameScreen = () => {
   // Vote tracking for host blocking
   const [currentPhaseVoteCount, setCurrentPhaseVoteCount] = useState(0);
   const [requiredVoteCount, setRequiredVoteCount] = useState(0);
+  
+  // Seer reveal
+  const [seerRevealTarget, setSeerRevealTarget] = useState<{ name: string; baseRole: string; themedRole: string } | null>(null);
+  
+  // Morning reveal state
+  const [isShowingMorningReveal, setIsShowingMorningReveal] = useState(false);
+  const [morningResult, setMorningResult] = useState<{
+    killedPlayerName: string | null;
+    wasSaved: boolean;
+    savedByDoctor: boolean;
+  } | null>(null);
+  
+  // Game Over state
+  const [isGameOver, setIsGameOver] = useState(false);
+  const [gameOverData, setGameOverData] = useState<{
+    killedPlayer: PlayerWithRole | null;
+    savedPlayer: PlayerWithRole | null;
+    wasSuccessfullySaved: boolean;
+  } | null>(null);
 
   const playerId = localStorage.getItem('player_id');
 
@@ -148,16 +184,16 @@ const GameScreen = () => {
           : sessionData.timeline;
         setSession({ ...sessionData, timeline } as GameSession);
 
-        // Fetch ALL player roles for this session (needed for vote counting)
+        // Fetch ALL player roles for this session (needed for vote counting and seer)
         const { data: allRolesData } = await supabase
           .from('player_roles')
-          .select('player_id, base_role')
+          .select('player_id, base_role, themed_role')
           .eq('session_id', sessionData.id);
 
         if (allRolesData) {
-          const rolesMap: Record<string, string> = {};
+          const rolesMap: Record<string, { base: string; themed: string }> = {};
           for (const r of allRolesData) {
-            rolesMap[r.player_id] = r.base_role;
+            rolesMap[r.player_id] = { base: r.base_role, themed: r.themed_role };
           }
           setPlayerRoles(rolesMap);
         }
@@ -173,6 +209,11 @@ const GameScreen = () => {
           if (roleData) {
             setPlayerRole(roleData);
           }
+        }
+        
+        // Check if we're past the last item (game over)
+        if (timeline && sessionData.timeline_index >= timeline.length) {
+          setIsGameOver(true);
         }
       }
       setLoading(false);
@@ -201,7 +242,7 @@ const GameScreen = () => {
     }
 
     // Count players with active roles
-    const count = Object.values(playerRoles).filter(role => activeRoles.includes(role)).length;
+    const count = Object.values(playerRoles).filter(r => activeRoles.includes(r.base)).length;
     setRequiredVoteCount(count);
   }, [currentTimelineItem, playerRoles]);
 
@@ -251,12 +292,26 @@ const GameScreen = () => {
     };
   }, [session?.id, roomId, currentTimelineItem?.phase]);
 
-  // Reset vote count when phase changes
+  // Check for existing vote when phase changes (prevent duplicate voting)
   useEffect(() => {
+    const checkExistingVote = async () => {
+      if (!session?.id || !playerId || !currentTimelineItem) return;
+      
+      const { data: existingVote } = await supabase
+        .from('votes')
+        .select('id')
+        .eq('session_id', session.id)
+        .eq('phase', currentTimelineItem.phase)
+        .eq('voter_player_id', playerId)
+        .maybeSingle();
+      
+      setHasVoted(!!existingVote);
+    };
+    
     setCurrentPhaseVoteCount(0);
-    setHasVoted(false);
     setSelectedTarget(null);
-  }, [session?.timeline_index]);
+    checkExistingVote();
+  }, [session?.timeline_index, session?.id, playerId, currentTimelineItem?.phase]);
 
   // Realtime subscription for session updates
   useEffect(() => {
@@ -287,6 +342,11 @@ const GameScreen = () => {
               const currentItem = updated.timeline?.[updated.timeline_index];
               if (currentItem) {
                 checkAndVibrate(currentItem.phase);
+              }
+              
+              // Check for game over
+              if (updated.timeline && updated.timeline_index >= updated.timeline.length) {
+                setIsGameOver(true);
               }
             }
             return updated;
@@ -365,7 +425,11 @@ const GameScreen = () => {
       await audio.play();
     } catch (error) {
       console.error('TTS error:', error);
-      toast({ title: 'Audio playback failed', description: error instanceof Error ? error.message : 'Unknown error', variant: 'destructive' });
+      toast({ 
+        title: 'Audio Error', 
+        description: error instanceof Error ? error.message : 'Failed to play narration', 
+        variant: 'destructive' 
+      });
     } finally {
       setIsGeneratingAudio(false);
     }
@@ -379,9 +443,54 @@ const GameScreen = () => {
     setIsSpeaking(false);
   }, []);
 
+  // Handle morning reveal calculation
+  const handleMorningPhase = useCallback(async () => {
+    if (!session?.id || !roomId) return;
+    
+    setIsShowingMorningReveal(true);
+    
+    const result = await calculateResults(session.id, roomId, players);
+    
+    setMorningResult({
+      killedPlayerName: result.killedPlayerName,
+      wasSaved: result.wasSaved,
+      savedByDoctor: result.savedPlayerId !== null,
+    });
+    
+    // Prepare game over data
+    const killedPlayer = players.find(p => p.id === result.killedPlayerId);
+    const savedPlayer = players.find(p => p.id === result.savedPlayerId);
+    
+    setGameOverData({
+      killedPlayer: killedPlayer ? {
+        ...killedPlayer,
+        baseRole: playerRoles[killedPlayer.id]?.base || 'Unknown',
+        themedRole: playerRoles[killedPlayer.id]?.themed || 'Unknown',
+        isAlive: result.wasSaved || !result.killedPlayerId,
+        wasKilled: !result.wasSaved,
+        wasSaved: result.wasSaved,
+      } : null,
+      savedPlayer: savedPlayer ? {
+        ...savedPlayer,
+        baseRole: playerRoles[savedPlayer.id]?.base || 'Unknown',
+        themedRole: playerRoles[savedPlayer.id]?.themed || 'Unknown',
+        isAlive: true,
+        wasKilled: false,
+        wasSaved: true,
+      } : null,
+      wasSuccessfullySaved: result.wasSaved,
+    });
+    
+    // Hide reveal after 4 seconds
+    setTimeout(() => {
+      setIsShowingMorningReveal(false);
+    }, 4000);
+  }, [session?.id, roomId, players, playerRoles, calculateResults]);
+
   // Host advances timeline - with blocking logic
-  const advanceTimeline = useCallback(async () => {
-    if (!session || isLastItem || isAdvancing || !roomId || !canAdvance) return;
+  const advanceTimeline = useCallback(async (skipPhase = false) => {
+    if (!session || isAdvancing || !roomId) return;
+    if (!skipPhase && !canAdvance) return;
 
     setIsAdvancing(true);
     try {
@@ -396,13 +505,26 @@ const GameScreen = () => {
         throw new Error('Only the host can advance the timeline');
       }
 
-      const newIndex = session.timeline_index + 1;
-      const newItem = session.timeline?.[newIndex];
+      // Check if moving to morning phase - trigger reveal
+      const nextIndex = session.timeline_index + 1;
+      const nextItem = session.timeline?.[nextIndex];
+      
+      if (nextItem?.phase === 'morning') {
+        await handleMorningPhase();
+      }
+
+      // Check if this is the last item
+      if (isLastItem) {
+        setIsGameOver(true);
+        return;
+      }
+
+      const newItem = session.timeline?.[nextIndex];
 
       const { error } = await supabase
         .from('game_sessions')
         .update({
-          timeline_index: newIndex,
+          timeline_index: nextIndex,
           phase: newItem?.phase ?? session.phase,
           script: newItem?.text ?? session.script,
         })
@@ -415,7 +537,15 @@ const GameScreen = () => {
     } finally {
       setIsAdvancing(false);
     }
-  }, [session, isLastItem, isAdvancing, roomId, canAdvance, toast]);
+  }, [session, isLastItem, isAdvancing, roomId, canAdvance, toast, handleMorningPhase]);
+
+  // Handle timer expiry
+  const handleTimerExpired = useCallback(() => {
+    toast({ 
+      title: 'Time\'s up!', 
+      description: 'You can now skip this phase if needed.',
+    });
+  }, [toast]);
 
   // Submit vote
   const submitVote = useCallback(async () => {
@@ -454,21 +584,47 @@ const GameScreen = () => {
           target_player_id: selectedTarget,
         });
 
-      if (error) throw error;
+      if (error) {
+        // Check for duplicate vote error
+        if (error.code === '23505') {
+          toast({ title: 'Already voted', description: 'You have already voted this phase', variant: 'destructive' });
+          setHasVoted(true);
+          return;
+        }
+        throw error;
+      }
 
       setHasVoted(true);
       triggerVibration([100]);
-      toast({ title: 'Vote submitted!' });
+      
+      // Seer reveal - show the target's role
+      if (currentTimelineItem?.action === 'reveal_role' && playerRole?.base_role === 'Seer') {
+        const targetPlayer = players.find(p => p.id === selectedTarget);
+        const targetRoleInfo = playerRoles[selectedTarget];
+        if (targetPlayer && targetRoleInfo) {
+          setSeerRevealTarget({
+            name: targetPlayer.name,
+            baseRole: targetRoleInfo.base,
+            themedRole: targetRoleInfo.themed,
+          });
+        }
+      } else {
+        toast({ title: 'Vote submitted!', description: 'Your choice has been recorded.' });
+      }
     } catch (err: any) {
       console.error('Vote error:', err);
       toast({ title: 'Failed to vote', description: err.message, variant: 'destructive' });
     }
-  }, [session, roomId, playerId, selectedTarget, hasVoted, currentTimelineItem, toast]);
+  }, [session, roomId, playerId, selectedTarget, hasVoted, currentTimelineItem, playerRole, players, playerRoles, toast]);
 
   const handleRevealRole = () => {
     setRoleRevealed(true);
     triggerVibration([100]);
   };
+  
+  const handlePlayAgain = useCallback(() => {
+    navigate(`/lobby/${code}`);
+  }, [navigate, code]);
 
   if (loading) {
     return (
@@ -483,6 +639,58 @@ const GameScreen = () => {
       <div className="h-full bg-background flex items-center justify-center">
         <p className="text-muted-foreground">Game session not found</p>
       </div>
+    );
+  }
+
+  // GAME OVER SCREEN
+  if (isGameOver) {
+    const allPlayersWithRoles: PlayerWithRole[] = players.map(p => ({
+      ...p,
+      baseRole: playerRoles[p.id]?.base || 'Unknown',
+      themedRole: playerRoles[p.id]?.themed || 'Unknown',
+      isAlive: true,
+      wasKilled: gameOverData?.killedPlayer?.id === p.id && !gameOverData?.wasSuccessfullySaved,
+      wasSaved: gameOverData?.savedPlayer?.id === p.id && gameOverData?.wasSuccessfullySaved,
+    }));
+
+    return (
+      <GameOverScreen
+        theme={session.theme}
+        players={allPlayersWithRoles}
+        killedPlayer={gameOverData?.killedPlayer || null}
+        savedPlayer={gameOverData?.savedPlayer || null}
+        wasSuccessfullySaved={gameOverData?.wasSuccessfullySaved || false}
+        roomCode={code || ''}
+        onPlayAgain={handlePlayAgain}
+      />
+    );
+  }
+
+  // Morning Reveal Overlay
+  if (isShowingMorningReveal && morningResult) {
+    return (
+      <>
+        <MorningReveal
+          killedPlayerName={morningResult.killedPlayerName}
+          wasSaved={morningResult.wasSaved}
+          savedByDoctor={morningResult.savedByDoctor}
+          isRevealing={true}
+        />
+      </>
+    );
+  }
+
+  // Seer Reveal Modal
+  if (seerRevealTarget) {
+    return (
+      <>
+        <SeerRevealModal
+          targetName={seerRevealTarget.name}
+          targetRole={seerRevealTarget.baseRole}
+          themedRole={seerRevealTarget.themedRole}
+          onClose={() => setSeerRevealTarget(null)}
+        />
+      </>
     );
   }
 
@@ -562,47 +770,53 @@ const GameScreen = () => {
             )}
           </div>
 
+          {/* Phase Timer (for action phases) */}
+          {isActionPhase && (
+            <PhaseTimer
+              isActionPhase={isActionPhase}
+              allVotesIn={allVotesIn}
+              onTimerExpired={handleTimerExpired}
+              onSkipPhase={() => advanceTimeline(true)}
+              disabled={isAdvancing || isSpeaking}
+            />
+          )}
+
           {/* Vote Status (only for action phases) */}
           {isActionPhase && requiredVoteCount > 0 && (
-            <div className="bg-card/30 border border-border rounded-xl p-4 w-full text-center">
-              <p className="text-sm text-muted-foreground">
-                Votes received: <span className="font-bold text-foreground">{currentPhaseVoteCount}</span> / {requiredVoteCount}
-              </p>
-              {!allVotesIn && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Waiting for all players to vote...
-                </p>
-              )}
-              {allVotesIn && (
-                <p className="text-xs text-primary mt-1 font-medium">
-                  All votes in! You can proceed.
-                </p>
-              )}
-            </div>
+            <VoteProgress
+              currentVotes={currentPhaseVoteCount}
+              requiredVotes={requiredVoteCount}
+              allVotesIn={allVotesIn}
+            />
           )}
 
           {/* Next Button with Blocking Logic */}
-          {!isLastItem && (
+          {!isLastItem && !isActionPhase && (
             <Button
-              onClick={advanceTimeline}
+              onClick={() => advanceTimeline()}
               size="lg"
               variant="outline"
               className="gap-2"
-              disabled={isAdvancing || isSpeaking || !canAdvance}
+              disabled={isAdvancing || isSpeaking}
             >
               {isAdvancing ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
-              ) : !canAdvance ? (
-                <Lock className="w-5 h-5" />
               ) : (
                 <ChevronRight className="w-5 h-5" />
               )}
-              {!canAdvance ? 'Waiting for Votes' : 'Next'}
+              Next
             </Button>
           )}
 
           {isLastItem && (
-            <p className="text-sm text-muted-foreground">End of timeline</p>
+            <Button
+              onClick={() => setIsGameOver(true)}
+              size="lg"
+              className="gap-2"
+            >
+              <Sparkles className="w-5 h-5" />
+              End Game
+            </Button>
           )}
         </main>
       </div>
@@ -612,7 +826,7 @@ const GameScreen = () => {
   // PLAYER VIEW
   const showVotingUI = isPlayerActive() && 
     currentTimelineItem?.action && 
-    ['vote_kill', 'vote_save'].includes(currentTimelineItem.action) &&
+    ['vote_kill', 'vote_save', 'reveal_role'].includes(currentTimelineItem.action) &&
     !hasVoted;
 
   const showSleepingScreen = !isPlayerActive() && 
@@ -638,7 +852,11 @@ const GameScreen = () => {
           <div className="w-full space-y-4">
             <div className="text-center mb-4">
               <p className="text-lg font-semibold text-foreground">
-                {currentTimelineItem?.action === 'vote_kill' ? 'Choose a victim' : 'Choose who to save'}
+                {currentTimelineItem?.action === 'vote_kill' 
+                  ? 'Choose a victim' 
+                  : currentTimelineItem?.action === 'reveal_role'
+                    ? 'Choose someone to investigate'
+                    : 'Choose who to save'}
               </p>
               <p className="text-sm text-muted-foreground">
                 {currentTimelineItem?.text}
@@ -686,7 +904,9 @@ const GameScreen = () => {
         {/* Voted confirmation */}
         {hasVoted && isPlayerActive() && (
           <div className="text-center">
-            <Check className="w-16 h-16 text-primary mx-auto mb-4" />
+            <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-4">
+              <Check className="w-8 h-8 text-primary" />
+            </div>
             <p className="text-lg font-semibold text-foreground">Vote Submitted!</p>
             <p className="text-sm text-muted-foreground">Waiting for others...</p>
           </div>
