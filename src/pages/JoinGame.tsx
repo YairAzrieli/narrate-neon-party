@@ -39,7 +39,10 @@ const JoinGame = () => {
         avatarUrl = await uploadAvatar(avatarFile);
       }
 
-      await addPlayer(room.id, name, avatarUrl);
+      const player = await addPlayer(room.id, name, avatarUrl);
+      // Store player ID for role lookup on game screen
+      localStorage.setItem('player_id', player.id);
+      localStorage.removeItem('is_host'); // Ensure they're marked as player, not host
       setHasJoined(true);
       toast({ title: 'Welcome to the game!', description: 'Waiting for host to start' });
     } catch (err: any) {

@@ -27,6 +27,9 @@ const Lobby = () => {
   const handleCreateGame = async () => {
     const newRoom = await createRoom();
     if (newRoom) {
+      // Mark this device as the host
+      localStorage.setItem('is_host', 'true');
+      localStorage.removeItem('player_id');
       toast({ title: 'Game created!', description: 'Share the code with friends' });
     }
   };
